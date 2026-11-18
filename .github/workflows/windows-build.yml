@@ -1,0 +1,140 @@
+name: Windows build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows x64 Release
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.12.0'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Install build tools
+        run: python -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.13.0
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          -DQT_DEFAULT_MAJOR_VERSION=6
+          -DQWINDOWKIT_BUILD_WIDGETS=OFF
+
+      - name: Build
+        run: cmake --build build --target labcompass --parallel 2
+
+      - name: Package application and runtimes
+        run: |
+          $packageDir = Join-Path $env:RUNNER_TEMP 'LabCompass-windows-x64'
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+          Copy-Item -LiteralPath 'build/runtime/labcompass.exe' -Destination $packageDir
+          Get-ChildItem -Path build -Filter '*.dll' -File -Recurse |
+            Copy-Item -Destination $packageDir
+
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" `
+            --release --no-compiler-runtime --include-soft-plugins `
+            --qmldir app/qml --qml-deploy-dir "$packageDir/qml" `
+            "$packageDir/labcompass.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "windeployqt failed with exit code $LASTEXITCODE"
+          }
+
+          $crtDir = Join-Path $env:VCToolsRedistDir 'x64/Microsoft.VC143.CRT'
+          Copy-Item -Path "$crtDir/*.dll" -Destination $packageDir
+          Copy-Item -LiteralPath 'LICENSE.md', 'README.md' -Destination $packageDir
+          Set-Content -LiteralPath "$packageDir/qt.conf" -Encoding utf8 -Value @(
+            '[Paths]'
+            'Prefix=.'
+            'Plugins=.'
+            'QmlImports=qml'
+          )
+
+          foreach ($requiredFile in @(
+            'labcompass.exe', 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Quick.dll',
+            'Qt6Svg.dll', 'platforms/qwindows.dll', 'imageformats/qsvg.dll',
+            'msvcp140.dll', 'vcruntime140.dll'
+          )) {
+            if (-not (Test-Path -LiteralPath (Join-Path $packageDir $requiredFile))) {
+              throw "Package is missing $requiredFile"
+            }
+          }
+
+      - name: Check packaged application startup
+        timeout-minutes: 2
+        run: |
+          $packageDir = Join-Path $env:RUNNER_TEMP 'LabCompass-windows-x64'
+          $stdoutPath = Join-Path $env:RUNNER_TEMP 'labcompass-stdout.log'
+          $stderrPath = Join-Path $env:RUNNER_TEMP 'labcompass-stderr.log'
+          $appLogPath = Join-Path $env:APPDATA 'FutureCode/LabCompass/log.txt'
+          $env:PATH = "$packageDir;$env:SystemRoot/System32;$env:SystemRoot"
+          foreach ($variable in @(
+            'QTDIR', 'QT_ROOT_DIR', 'QT_PLUGIN_PATH',
+            'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML_IMPORT_PATH', 'QML2_IMPORT_PATH'
+          )) {
+            Remove-Item -LiteralPath "Env:$variable" -ErrorAction SilentlyContinue
+          }
+          $env:QT_QUICK_BACKEND = 'software'
+
+          $process = Start-Process -FilePath "$packageDir/labcompass.exe" `
+            -WorkingDirectory $packageDir -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+          try {
+            if ($process.WaitForExit(15000)) {
+              throw "Packaged application exited during startup with code $($process.ExitCode)"
+            }
+            if (-not (Test-Path -LiteralPath $appLogPath) -or
+                -not (Select-String -LiteralPath $appLogPath -SimpleMatch `
+                  'Initialization finished' -Quiet)) {
+              throw 'Packaged application did not finish initialization'
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              $process.Kill()
+              $process.WaitForExit()
+            }
+            foreach ($logPath in @($stdoutPath, $stderrPath, $appLogPath)) {
+              if (Test-Path -LiteralPath $logPath) {
+                Get-Content -LiteralPath $logPath
+              }
+            }
+          }
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v7
+        with:
+          name: LabCompass-windows-x64
+          path: ${{ runner.temp }}/LabCompass-windows-x64/
+          if-no-files-found: error
+          retention-days: 30

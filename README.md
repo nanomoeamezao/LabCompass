@@ -63,3 +63,12 @@ After installing the latest version of Qt, run the following command to build:
     cmake --build build --config release --target labcompass
 
 Labcompass binary is located in build/runtime directory.
+
+Windows builds with GitHub Actions
+---
+
+The **Windows build** workflow builds a Release version for Windows x64 on every push and pull request. You can also start it manually from **Actions > Windows build > Run workflow**.
+
+After a successful run, download **LabCompass-windows-x64** from the run's **Artifacts** section. Extract the entire ZIP, then run `labcompass.exe`. Keep the DLLs and subdirectories beside the executable. Qt and the Visual C++ runtime are included; no development tools or separate runtime installation are required.
+
+These builds target Windows 10 (version 1809 or later) and Windows 11, x64. The workflow checks that the packaged application starts with the Qt SDK paths removed before uploading the artifact.
