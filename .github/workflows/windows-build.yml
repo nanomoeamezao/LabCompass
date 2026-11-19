@@ -65,12 +65,17 @@ jobs:
             Copy-Item -Destination $packageDir
 
           & "$env:QT_ROOT_DIR/bin/windeployqt.exe" `
-            --release --no-compiler-runtime --include-soft-plugins `
+            --release --no-compiler-runtime `
             --qmldir app/qml --qml-deploy-dir "$packageDir/qml" `
             "$packageDir/labcompass.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "windeployqt failed with exit code $LASTEXITCODE"
           }
+
+          New-Item -ItemType Directory -Path "$packageDir/imageformats" -Force | Out-Null
+          Copy-Item -LiteralPath "$env:QT_ROOT_DIR/bin/Qt6Svg.dll" -Destination $packageDir
+          Copy-Item -LiteralPath "$env:QT_ROOT_DIR/plugins/imageformats/qsvg.dll" `
+            -Destination "$packageDir/imageformats"
 
           $crtDir = Join-Path $env:VCToolsRedistDir 'x64/Microsoft.VC143.CRT'
           Copy-Item -Path "$crtDir/*.dll" -Destination $packageDir
