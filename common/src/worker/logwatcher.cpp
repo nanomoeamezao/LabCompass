@@ -1,4 +1,6 @@
 #include "logwatcher.h"
+#include <QFileInfo>
+#include <QUrl>
 
 #ifdef Q_OS_WIN
 #include "windows.h"
@@ -6,6 +8,17 @@
 #endif
 
 using namespace Qt::StringLiterals;
+
+static QString normalizedClientPath(const QString& path)
+{
+    if (path.isEmpty())
+        return path;
+
+    const QUrl url(path);
+    const auto localPath = url.isLocalFile() ? url.toLocalFile() : QDir::fromNativeSeparators(path);
+    const QFileInfo info(localPath);
+    return info.isFile() ? info.absolutePath() : QDir::cleanPath(localPath);
+}
 
 const QStringList getStartLines() {
     return {
@@ -238,7 +251,7 @@ Q_GLOBAL_STATIC(QRegularExpression, LOG_REGEX, uR"(^\d+\/\d+\/\d+ \d+:\d+:\d+ \d
 LogWatcher::LogWatcher(ApplicationModel* applicationModel)
 {
     this->model = applicationModel;
-    clientPath = model->get_settings()->get_poeClientPath();
+    clientPath = normalizedClientPath(model->get_settings()->get_poeClientPath());
     file.reset(new QFile(QDir(clientPath).filePath(u"logs/Client.txt"_s)));
 
     timer.setInterval(1000);
@@ -251,7 +264,8 @@ LogWatcher::LogWatcher(ApplicationModel* applicationModel)
 void LogWatcher::work()
 {
     // reset file if client path settings have changed
-    auto newClientPath = model->get_settings()->get_poeClientPath();
+    auto newClientPath = normalizedClientPath(model->get_settings()->get_poeClientPath());
+    model->get_settings()->set_poeClientPath(newClientPath);
     if (clientPath != newClientPath) {
         clientPath = newClientPath;
         file.reset(new QFile(QDir(clientPath).filePath(u"logs/Client.txt"_s)));
